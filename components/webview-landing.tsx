@@ -27,16 +27,21 @@ const ANDROID_BROWSER_INTENT = buildAndroidBrowserIntent(MAIN_SITE_URL);
 /**
  * iOS browser hand-off attempts, tried in order:
  *
- * 1. `googlechromes://` -> Google Chrome (only opens when Chrome is installed).
- * 2. `x-safari-` -> Safari.
+ * 1. `googlechromes://` -> Google Chrome (https).
+ * 2. `googlechrome://` -> Google Chrome (http variant).
+ * 3. `x-safari-` -> Safari.
+ * 4. `google://` -> the Google app (last resort; it has no documented scheme
+ *    for opening an arbitrary URL, so it only launches the app itself).
  *
  * No prompt and no in-webview fallback: the goal is to get the visitor into a
- * real browser. In-app browsers such as TikTok's WKWebView may block both, in
- * which case nothing happens and the visitor stays on this page.
+ * real browser. In-app browsers such as TikTok's WKWebView may block all of
+ * them, in which case nothing happens and the visitor stays on this page.
  */
 const IOS_ESCAPE_SCHEMES = [
   `googlechromes://${MAIN_SITE_URL.replace(/^https?:\/\//i, "")}`,
+  `googlechrome://${MAIN_SITE_URL.replace(/^https?:\/\//i, "")}`,
   `x-safari-${MAIN_SITE_URL}`,
+  "google://",
 ];
 
 const IOS_ATTEMPT_DELAY = 700;
