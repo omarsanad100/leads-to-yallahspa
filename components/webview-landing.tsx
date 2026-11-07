@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { useRef, useState, type MouseEvent } from "react";
 import { MAIN_SITE_URL } from "@/lib/site";
 
 const IOS_DEVICE = /iPhone|iPad|iPod/i;
@@ -33,9 +33,9 @@ const ANDROID_BROWSER_INTENT = buildAndroidBrowserIntent(MAIN_SITE_URL);
  * 4. `google://` -> the Google app (last resort; it has no documented scheme
  *    for opening an arbitrary URL, so it only launches the app itself).
  *
- * No prompt and no in-webview fallback: the goal is to get the visitor into a
- * real browser. In-app browsers such as TikTok's WKWebView may block all of
- * them, in which case nothing happens and the visitor stays on this page.
+ * In-app browsers such as TikTok's WKWebView may block all of them. When that
+ * happens the page shows a short instruction sheet with copy / continue
+ * fallbacks instead of silently opening the site inside the webview.
  */
 const IOS_ESCAPE_SCHEMES = [
   `googlechromes://${MAIN_SITE_URL.replace(/^https?:\/\//i, "")}`,
@@ -47,6 +47,11 @@ const IOS_ESCAPE_SCHEMES = [
 const IOS_ATTEMPT_DELAY = 700;
 
 export default function WebViewLanding() {
+  const [showIosHelp, setShowIosHelp] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const attemptId = useRef(0);
+
   function handleOpenMainSite(event: MouseEvent<HTMLAnchorElement>) {
     if (
       event.metaKey ||
@@ -63,7 +68,7 @@ export default function WebViewLanding() {
     const userAgent = navigator.userAgent;
 
     if (IOS_DEVICE.test(userAgent)) {
-      tryIosSchemes(0);
+      attemptIosEscape();
       return;
     }
 
@@ -77,24 +82,41 @@ export default function WebViewLanding() {
 
   /**
    * Tries the iOS browser schemes one after another. A successful hand-off
-   * hides the page, so a still-visible page means the attempt was blocked.
+   * hides the page, so a still-visible page means every attempt was blocked.
    */
-  function tryIosSchemes(index: number) {
-    if (document.visibilityState !== "visible") {
-      return;
-    }
+  function attemptIosEscape() {
+    const attempt = ++attemptId.current;
 
-    if (index >= IOS_ESCAPE_SCHEMES.length) {
-      return;
-    }
+    setCopied(false);
+    setShowIosHelp(false);
+    setOpening(true);
 
-    try {
-      window.location.assign(IOS_ESCAPE_SCHEMES[index]);
-    } catch {
-      // Some webviews throw on unsupported schemes; move on to the next one.
-    }
+    let index = 0;
 
-    window.setTimeout(() => tryIosSchemes(index + 1), IOS_ATTEMPT_DELAY);
+    const tryNext = () => {
+      if (attempt !== attemptId.current) return;
+
+      if (document.visibilityState !== "visible") {
+        setOpening(false);
+        return;
+      }
+
+      if (index >= IOS_ESCAPE_SCHEMES.length) {
+        setOpening(false);
+        setShowIosHelp(true);
+        return;
+      }
+
+      try {
+        window.location.assign(IOS_ESCAPE_SCHEMES[index++]);
+      } catch {
+        // Some webviews throw on unsupported schemes; move on to the next one.
+      }
+
+      window.setTimeout(tryNext, IOS_ATTEMPT_DELAY);
+    };
+
+    tryNext();
   }
 
   function openAndroidIntent() {
@@ -112,6 +134,34 @@ export default function WebViewLanding() {
     window.setTimeout(() => intentFrame.remove(), 2500);
   }
 
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(MAIN_SITE_URL);
+      setCopied(true);
+      return;
+    } catch {
+      // Clipboard API is frequently blocked inside in-app webviews.
+    }
+
+    const field = document.createElement("textarea");
+    field.value = MAIN_SITE_URL;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.top = "-1000px";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+
+    try {
+      field.select();
+      field.setSelectionRange(0, MAIN_SITE_URL.length);
+      setCopied(document.execCommand("copy"));
+    } catch {
+      setCopied(false);
+    } finally {
+      field.remove();
+    }
+  }
+
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-[#06110e] px-6 text-center text-[#f7f2e7]">
       <h1 className="text-2xl font-bold">Yallah Spa</h1>
@@ -119,10 +169,76 @@ export default function WebViewLanding() {
       <a
         href={MAIN_SITE_URL}
         onClick={handleOpenMainSite}
+        aria-busy={opening}
         className="rounded-full bg-[#d3af6d] px-8 py-3.5 text-base font-bold text-[#08120f] transition active:scale-[0.98]"
       >
-        افتح الموقع
+        {opening ? "جارٍ الفتح…" : "افتح الموقع"}
       </a>
+
+      {showIosHelp && (
+        <div
+          role="presentation"
+          onClick={() => setShowIosHelp(false)}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ios-help-title"
+            dir="rtl"
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl bg-[#0d1b17] p-5 text-right text-[#f7f2e7] shadow-xl"
+          >
+            <h2 id="ios-help-title" className="text-lg font-bold">
+              افتح الموقع في المتصفح
+            </h2>
+
+            <p className="mt-2 text-sm leading-6 text-white/70">
+              هذا المتصفح داخل التطبيق يمنع الفتح التلقائي. اضغط على زر{" "}
+              <span className="font-bold text-white">⋯</span> أو زر المشاركة في
+              أعلى الشاشة، ثم اختر{" "}
+              <span className="font-bold text-white">«فتح في المتصفح»</span>.
+            </p>
+
+            <p className="mt-3 text-sm leading-6 text-white/70">
+              أو انسخ الرابط التالي وافتحه في متصفح هاتفك:
+            </p>
+
+            <div
+              dir="ltr"
+              className="mt-2 select-all break-all rounded-xl bg-black/30 px-3 py-2 text-left text-xs text-white/80"
+            >
+              {MAIN_SITE_URL}
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={copyLink}
+                className="flex-1 rounded-full bg-[#d3af6d] px-4 py-3 text-sm font-bold text-[#08120f] transition active:scale-[0.98]"
+              >
+                {copied ? "تم النسخ ✓" : "نسخ الرابط"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowIosHelp(false)}
+                className="rounded-full border border-white/20 px-4 py-3 text-sm font-bold text-white/80 transition active:scale-[0.98]"
+              >
+                إغلاق
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => window.location.replace(MAIN_SITE_URL)}
+              className="mt-3 w-full text-center text-xs font-bold text-white/50 underline underline-offset-4"
+            >
+              المتابعة داخل هذا المتصفح
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
